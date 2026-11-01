@@ -3,7 +3,6 @@ package com.retroplayer.ui
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.combinedClickable
-import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
@@ -17,18 +16,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyListState
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.BasicText
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -36,9 +31,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.LiveRegionMode
@@ -49,14 +42,12 @@ import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
-import androidx.compose.ui.zIndex
 import androidx.media3.common.Player
 import com.retroplayer.PlaybackState
 import com.retroplayer.PlayerViewModel
 import com.retroplayer.QueueEntry
 import com.retroplayer.RemovedEntry
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
 
 /** Two stacked windows: the player, and Up Next filling the rest. Up Next can be maximized over the player. */
 @Composable
@@ -234,7 +225,6 @@ private fun UpNextWindow(
     modifier: Modifier,
 ) {
     val state = vm.playback
-    var editing by rememberSaveable { mutableStateOf(false) }
     // The last removal, for Undo. A new removal replaces it; it hides on its own after 6 s.
     var removed by remember { mutableStateOf<RemovedEntry?>(null) }
     LaunchedEffect(removed) {
@@ -258,22 +248,13 @@ private fun UpNextWindow(
         },
     ) {
         if (maximized) CompactPlayer(vm, state, positionMs, Modifier.padding(start = 6.dp, top = 6.dp, end = 6.dp))
-        Row(Modifier.fillMaxWidth().padding(6.dp), horizontalArrangement = Arrangement.End) {
-            Win95Button({ editing = !editing }, Modifier.size(84.dp, 44.dp), enabled = editing || upcoming > 0, latched = editing) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Glyph(Glyphs.Edit)
-                    RetroText(if (editing) "Done" else "Edit", size = 15.sp, font = RetroFonts.Chrome)
-                }
-            }
-        }
         QueueList(
             vm = vm,
             state = state,
-            editing = editing,
             onRemove = { entry -> vm.removeFromQueue(entry)?.let { removed = it } },
             onShowArtist = onShowArtist,
             onShare = onShare,
-            modifier = Modifier.weight(1f).padding(horizontal = 6.dp),
+            modifier = Modifier.weight(1f).padding(start = 6.dp, top = 6.dp, end = 6.dp),
         )
         removed?.let { r ->
             UndoBar(r.title) {
@@ -343,63 +324,10 @@ private fun queueRows(queue: List<QueueEntry>): List<QueueRow> {
     }
 }
 
-/** Drag-to-reorder: the dragged row follows the finger and swaps places with each row it passes halfway. */
-private class QueueDrag(private val listState: LazyListState) {
-    var key by mutableStateOf<String?>(null)
-        private set
-    /** The rows in their new order while dragging, and after a drop until the player reports the new queue. */
-    var order by mutableStateOf<List<QueueRow>?>(null)
-    val offset = mutableFloatStateOf(0f)
-    private var base: List<QueueRow>? = null
-
-    fun start(key: String, rows: List<QueueRow>) {
-        this.key = key
-        order = rows
-        base = rows
-        offset.floatValue = 0f
-    }
-
-    fun drag(dy: Float) {
-        val rows = order ?: return
-        val from = rows.indexOfFirst { it.key == key }
-        if (from < 1) return
-        offset.floatValue += dy
-        // Row sizes rather than positions: the list may not have laid out the last swap yet.
-        fun size(i: Int) = rows.getOrNull(i)?.let { row ->
-            listState.layoutInfo.visibleItemsInfo.firstOrNull { it.key == row.key }?.size
-        }
-        val below = size(from + 1)
-        val above = if (from > 1) size(from - 1) else null // the current song stays on top
-        if (below != null && offset.floatValue > below / 2f) {
-            order = rows.toMutableList().apply { add(from + 1, removeAt(from)) }
-            offset.floatValue -= below
-        } else if (above != null && offset.floatValue < -above / 2f) {
-            order = rows.toMutableList().apply { add(from - 1, removeAt(from)) }
-            offset.floatValue += above
-        }
-    }
-
-    /** Ends the drag. Returns the moved entry and how many songs after the current one it now plays, or null if nothing moved. */
-    fun end(rows: List<QueueRow>): Pair<QueueEntry, Int>? {
-        val dropped = order
-        val dragged = key
-        key = null
-        offset.floatValue = 0f
-        val to = dropped?.indexOfFirst { it.key == dragged } ?: -1
-        // Give up if the queue changed under the finger (say, the song ended) or the row is back where it was.
-        if (dropped == null || rows !== base || to < 1 || to == rows.indexOfFirst { it.key == dragged }) {
-            order = null
-            return null
-        }
-        return dropped[to].entry to to
-    }
-}
-
 @Composable
 private fun QueueList(
     vm: PlayerViewModel,
     state: PlaybackState,
-    editing: Boolean,
     onRemove: (QueueEntry) -> Unit,
     onShowArtist: (String) -> Unit,
     onShare: (Long) -> Unit,
@@ -409,12 +337,6 @@ private fun QueueList(
     // The current song is always the first row, so jump back up when it changes.
     LaunchedEffect(state.songId) { listState.scrollToItem(0) }
     val rows = remember(state.queue) { queueRows(state.queue) }
-    val currentRows by rememberUpdatedState(rows)
-    val drag = remember(listState) { QueueDrag(listState) }
-    LaunchedEffect(rows) { if (drag.key == null) drag.order = null }
-    val scope = rememberCoroutineScope()
-    // Numbers follow the place in the queue, so they stay in order while a row is dragged.
-    val shown = (drag.order ?: rows).mapIndexed { i, row -> row to state.queuePosition + i + 1 }
     var menuFor by remember { mutableStateOf<String?>(null) }
     val menuX = with(LocalDensity.current) { 40.dp.roundToPx() }
 
@@ -423,42 +345,15 @@ private fun QueueList(
             state.queue.isEmpty() -> LcdMessage("QUEUE IS EMPTY")
             else -> Row {
                 LazyColumn(Modifier.weight(1f), state = listState) {
-                    items(shown, key = { (row) -> row.key }) { (row, number) ->
+                    itemsIndexed(rows, key = { _, row -> row.key }) { i, row ->
                         val entry = row.entry
-                        val dragging = row.key == drag.key
                         QueueRowView(
                             entry = entry,
-                            number = number,
+                            number = state.queuePosition + i + 1,
                             selected = menuFor == row.key,
-                            editing = editing,
-                            gripModifier = Modifier.pointerInput(row.key) {
-                                detectVerticalDragGestures(
-                                    onDragStart = { drag.start(row.key, currentRows) },
-                                    onVerticalDrag = { change, dy ->
-                                        change.consume()
-                                        drag.drag(dy)
-                                    },
-                                    onDragEnd = {
-                                        drag.end(currentRows)?.let { (moved, offset) ->
-                                            vm.moveInQueue(moved, offset)
-                                            // If the player doesn't report a new order, stop showing ours.
-                                            scope.launch {
-                                                delay(1_500)
-                                                if (drag.key == null) drag.order = null
-                                            }
-                                        }
-                                    },
-                                    onDragCancel = { drag.end(currentRows) },
-                                )
-                            },
                             onPlay = { vm.jumpTo(entry) },
                             onLongPress = { menuFor = row.key },
-                            onRemove = { onRemove(entry) },
-                            modifier = if (dragging) {
-                                Modifier.zIndex(1f).graphicsLayer { translationY = drag.offset.floatValue }
-                            } else {
-                                Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)
-                            },
+                            modifier = Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null),
                         ) {
                             if (menuFor == row.key) {
                                 Win95Menu(
@@ -503,13 +398,9 @@ private fun QueueRowView(
     entry: QueueEntry,
     number: Int,
     selected: Boolean,
-    editing: Boolean,
     onPlay: () -> Unit,
     onLongPress: () -> Unit,
-    onRemove: () -> Unit,
     modifier: Modifier,
-    /** The drag gesture for the grip shown in edit mode. */
-    gripModifier: Modifier,
     /** Popups anchored to this row. */
     overlay: @Composable () -> Unit,
 ) {
@@ -541,11 +432,6 @@ private fun QueueRowView(
                 .dottedOutline(selected, Color.White, 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            if (editing && !current) {
-                Box(Modifier.width(40.dp).height(58.dp).then(gripModifier), contentAlignment = Alignment.CenterEnd) {
-                    Glyph(Glyphs.Grip, color = Retro.LcdTextFaint)
-                }
-            }
             Row(
                 Modifier
                     .weight(1f)
@@ -572,11 +458,6 @@ private fun QueueRowView(
                     RetroText(entry.artist, color = sub, size = 13.sp)
                 }
                 RetroText(formatTime(entry.durationMs), color = sub, size = 20.sp, font = RetroFonts.Lcd)
-            }
-            if (editing && !current) {
-                Win95Button(onRemove, Modifier.padding(end = 6.dp).size(44.dp), description = "Remove ${entry.title} from queue") {
-                    Glyph(Glyphs.Close)
-                }
             }
         }
         overlay()

@@ -18,9 +18,8 @@ files already on your phone, keeps playing in the background, and remembers what
   Shuffle and repeat show their state with a lit LED, a label and a pressed-in button.
 - **Up Next**: shows what plays next. Tap a song to jump to it.
   Long-press a song for **Play now**, **Play next**, **Move to end**, **Go to artist**, **Share** and
-  **Remove from queue**. **Edit** shows a grip to drag songs into a new order and an X to remove them.
-  After a removal, **Undo** puts the song back where it was. The title-bar button maximizes the queue
-  over the player.
+  **Remove from queue**. After a removal, **Undo** puts the song back where it was. The title-bar
+  button maximizes the queue over the player.
 - **Share**: sends a song's audio file through the standard Android share sheet, from the player's
   ⋯ menu or a queue song's menu.
 - **Go to artist**: opens Library searched for that artist.
@@ -93,7 +92,7 @@ has stopped asking.
 | `ui/Retro.kt` | Design tokens, fonts, bevels and the Win95 parts: window, button, LCD panel, LED, slider, menu, status bar, search field, scrollbar. |
 | `ui/Glyphs.kt` | The vector icons. |
 | `ui/Screens.kt` | Library, Listen Again and the mini player. |
-| `ui/NowPlaying.kt` | Now Playing and the Up Next queue (edit, drag, menu, undo). |
+| `ui/NowPlaying.kt` | Now Playing and the Up Next queue (long-press menu, undo). |
 | `ui/App.kt` | Permissions, the taskbar, swipes and Back handling. |
 
 The player lives in a Media3 `MediaSessionService`, so music keeps playing when the app is closed.

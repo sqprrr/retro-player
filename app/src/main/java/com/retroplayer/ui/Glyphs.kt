@@ -39,13 +39,6 @@ object Glyphs {
     val PlayMarker = glyph(12f, 14f) { fill("M0 0l12 7-12 7z") }
 
     val Search = glyph(16f, 16f) { stroke(circle(6.5f, 6.5f, 4.5f) + "M10 10l5 5", 2f) }
-    val Edit = glyph(14f, 14f) { stroke("M2 12l1-4 7-7 3 3-7 7z", 2f) }
-    val Grip = glyph(10f, 16f) {
-        fill(
-            rect(0f, 1f, 3f, 3f) + rect(6f, 1f, 3f, 3f) + rect(0f, 7f, 3f, 3f) +
-                rect(6f, 7f, 3f, 3f) + rect(0f, 13f, 3f, 3f) + rect(6f, 13f, 3f, 3f),
-        )
-    }
     val Close = glyph(12f, 12f) { stroke("M1 1l10 10M11 1L1 11", 2.5f) }
     /** Two-color: draw it with `color = null`. */
     val Info = glyph(16f, 16f) {
