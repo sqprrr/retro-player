@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A beveled LCD square with a play triangle, on a 108dp adaptive icon canvas. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- light top/left edge -->
+    <path android:fillColor="#FFFFFFFF" android:pathData="M30,30h48v4h-44v44h-4z" />
+    <!-- dark bottom/right edge -->
+    <path android:fillColor="#FF404040" android:pathData="M78,30v48h-48v-4h44v-44z" />
+    <!-- LCD screen -->
+    <path android:fillColor="#FF0F2A12" android:pathData="M34,34h40v40h-40z" />
+    <!-- play symbol -->
+    <path android:fillColor="#FF9CE57A" android:pathData="M46,43l18,11l-18,11z" />
+</vector>
