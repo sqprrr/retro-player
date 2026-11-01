@@ -11,6 +11,7 @@ data class Song(
     val id: Long,
     val title: String,
     val artist: String,
+    val album: String,
     val durationMs: Long,
     val mimeType: String,
 ) {
@@ -32,6 +33,7 @@ object MusicLibrary {
             MediaStore.Audio.Media._ID,
             MediaStore.Audio.Media.TITLE,
             MediaStore.Audio.Media.ARTIST,
+            MediaStore.Audio.Media.ALBUM,
             MediaStore.Audio.Media.DURATION,
             MediaStore.Audio.Media.MIME_TYPE,
         )
@@ -46,6 +48,7 @@ object MusicLibrary {
             val idCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media._ID)
             val titleCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.TITLE)
             val artistCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ARTIST)
+            val albumCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.ALBUM)
             val durationCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.DURATION)
             val mimeCol = cursor.getColumnIndexOrThrow(MediaStore.Audio.Media.MIME_TYPE)
             while (cursor.moveToNext()) {
@@ -54,6 +57,7 @@ object MusicLibrary {
                     id = cursor.getLong(idCol),
                     title = cursor.getString(titleCol) ?: "Unknown title",
                     artist = if (artist.isNullOrBlank() || artist == MediaStore.UNKNOWN_STRING) "Unknown artist" else artist,
+                    album = cursor.getString(albumCol).orEmpty(),
                     durationMs = cursor.getLong(durationCol),
                     mimeType = cursor.getString(mimeCol) ?: "audio/*",
                 )

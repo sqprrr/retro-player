@@ -10,6 +10,7 @@ import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaLibraryInfo
 import androidx.media3.common.Player
 import androidx.media3.common.Timeline
 import androidx.media3.common.util.UnstableApi
@@ -85,10 +86,12 @@ class PlaybackService : MediaSessionService() {
             session: MediaSession,
             controller: MediaSession.ControllerInfo,
         ): MediaSession.ConnectionResult {
-            // Only our own UI gets the custom command; the notification and other apps get the defaults.
+            // Only our own UI gets the custom commands; the notification and other apps get the defaults.
             if (controller.packageName != packageName) return super.onConnect(session, controller)
             val commands = MediaSession.ConnectionResult.DEFAULT_SESSION_COMMANDS.buildUpon()
                 .add(SessionCommand(PLAY_NOW, Bundle.EMPTY))
+                .add(SessionCommand(MOVE, Bundle.EMPTY))
+                .add(SessionCommand(RESTORE, Bundle.EMPTY))
                 .build()
             return MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
                 .setAvailableSessionCommands(commands)
@@ -101,10 +104,15 @@ class PlaybackService : MediaSessionService() {
             customCommand: SessionCommand,
             args: Bundle,
         ): ListenableFuture<SessionResult> {
-            if (customCommand.customAction != PLAY_NOW) {
-                return super.onCustomCommand(session, controller, customCommand, args)
+            when (customCommand.customAction) {
+                PLAY_NOW -> playNow(args.getInt(ARG_INDEX))
+                MOVE -> move(args.getInt(ARG_INDEX), args.getInt(ARG_OFFSET))
+                RESTORE -> {
+                    val item = args.getBundle(ARG_ITEM)?.let { MediaItem.fromBundle(it, MediaLibraryInfo.INTERFACE_VERSION) }
+                    if (item != null) restore(item, args.getInt(ARG_INDEX), args.getInt(ARG_POSITION))
+                }
+                else -> return super.onCustomCommand(session, controller, customCommand, args)
             }
-            playNow(args.getInt(ARG_INDEX))
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS))
         }
 
@@ -189,6 +197,41 @@ class PlaybackService : MediaSessionService() {
         player.play()
     }
 
+    /**
+     * Moves the queue item at [index] so it plays [offset] songs after the current one (1 = next),
+     * keeping everything else in the same order. In shuffle mode only the shuffle order changes.
+     */
+    private fun move(index: Int, offset: Int) {
+        val current = player.currentMediaItemIndex
+        if (index !in 0 until player.mediaItemCount || index == current) return
+        val order = if (player.shuffleModeEnabled) shuffleOrder().toMutableList()
+        else (0 until player.mediaItemCount).toMutableList()
+        order.remove(index)
+        val position = (order.indexOf(current) + offset.coerceIn(1, order.size)).coerceAtMost(order.size)
+        if (player.shuffleModeEnabled) {
+            order.add(position, index)
+            player.setShuffleOrder(DefaultShuffleOrder(order.toIntArray(), System.nanoTime()))
+        } else {
+            player.moveMediaItem(index, position)
+        }
+    }
+
+    /**
+     * Puts a removed song back at playlist [index]. Adding an item gives it a random place in the
+     * shuffle order, so in shuffle mode it is then moved back to [position] in that order.
+     */
+    private fun restore(item: MediaItem, index: Int, position: Int) {
+        val songId = item.mediaId.toLongOrNull() ?: return
+        if (index !in 0..player.mediaItemCount) return
+        player.addMediaItem(index, item.buildUpon().setUri(songUri(songId)).build())
+        if (player.shuffleModeEnabled) {
+            val order = shuffleOrder().toMutableList()
+            order.remove(index)
+            order.add(position.coerceIn(0, order.size), index)
+            player.setShuffleOrder(DefaultShuffleOrder(order.toIntArray(), System.nanoTime()))
+        }
+    }
+
     /** Playlist indexes in the order shuffle mode plays them. */
     private fun shuffleOrder(): List<Int> {
         val timeline = player.currentTimeline
@@ -204,7 +247,14 @@ class PlaybackService : MediaSessionService() {
     companion object {
         /** Custom command: play the queue item at [ARG_INDEX] now, keeping the rest of the queue. */
         const val PLAY_NOW = "com.retroplayer.PLAY_NOW"
+        /** Custom command: move the queue item at [ARG_INDEX] to play [ARG_OFFSET] songs after the current one. */
+        const val MOVE = "com.retroplayer.MOVE"
+        /** Custom command: put [ARG_ITEM] back at playlist [ARG_INDEX] and shuffle position [ARG_POSITION]. */
+        const val RESTORE = "com.retroplayer.RESTORE"
         const val ARG_INDEX = "index"
+        const val ARG_OFFSET = "offset"
+        const val ARG_ITEM = "item"
+        const val ARG_POSITION = "position"
     }
 
     private val tick = object : Runnable {

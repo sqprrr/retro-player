@@ -12,6 +12,8 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.media3.common.C
+import androidx.media3.common.MediaItem
+import androidx.media3.common.MediaLibraryInfo
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
@@ -27,16 +29,26 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 enum class Tab(val label: String) {
-    LISTEN_AGAIN("LISTEN AGAIN"),
-    LIBRARY("LIBRARY"),
-    NOW_PLAYING("NOW PLAYING"),
+    LISTEN_AGAIN("Listen again"),
+    LIBRARY("Library"),
+    NOW_PLAYING("Playing"),
 }
 
 /** Which list the current queue was built from. */
 enum class QueueSource { LIBRARY, LISTEN_AGAIN, RECENTLY_PLAYED }
 
 /** A song in the play queue. [index] is its position in the player's playlist. */
-data class QueueEntry(val index: Int, val title: String, val artist: String, val isCurrent: Boolean)
+data class QueueEntry(
+    val index: Int,
+    val songId: Long?,
+    val title: String,
+    val artist: String,
+    val durationMs: Long,
+    val isCurrent: Boolean,
+)
+
+/** A song taken out of the queue, with what [PlayerViewModel.restore] needs to put it back. */
+class RemovedEntry(val title: String, val item: MediaItem, val index: Int, val position: Int)
 
 data class PlaybackState(
     val songId: Long? = null,
@@ -45,7 +57,11 @@ data class PlaybackState(
     val showPlayButton: Boolean = true,
     val durationMs: Long = 0,
     val shuffle: Boolean = false,
+    val repeatMode: Int = Player.REPEAT_MODE_OFF,
     val queue: List<QueueEntry> = emptyList(),
+    /** Where the current song is in play order (0-based), and how many songs the queue holds. */
+    val queuePosition: Int = 0,
+    val queueSize: Int = 0,
 )
 
 @OptIn(UnstableApi::class)
@@ -65,6 +81,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         private set
 
     private val library = MutableStateFlow<List<Song>?>(null)
+    private var songsById = emptyMap<Long, Song>()
     private val controllerFuture = MediaController.Builder(
         app, SessionToken(app, ComponentName(app, PlaybackService::class.java)),
     ).buildAsync()
@@ -100,6 +117,7 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val loaded = withContext(Dispatchers.IO) { MusicLibrary.load(app) }
             songs = loaded
+            songsById = loaded.associateBy { it.id }
             library.value = loaded
             libraryLoaded = true
             refresh()
@@ -122,7 +140,10 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
             durationMs = c.duration.takeIf { it != C.TIME_UNSET }
                 ?: songs.find { it.id == songId }?.durationMs ?: 0,
             shuffle = c.shuffleModeEnabled,
+            repeatMode = c.repeatMode,
             queue = upcoming(c),
+            queuePosition = playOrder(c).indexOf(c.currentMediaItemIndex).coerceAtLeast(0),
+            queueSize = c.mediaItemCount,
         )
     }
 
@@ -132,16 +153,31 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         val result = mutableListOf<QueueEntry>()
         var index = c.currentMediaItemIndex
         while (index != C.INDEX_UNSET && index < timeline.windowCount) {
-            val metadata = c.getMediaItemAt(index).mediaMetadata
+            val item = c.getMediaItemAt(index)
+            val songId = item.mediaId.toLongOrNull()
             result += QueueEntry(
                 index = index,
-                title = metadata.title?.toString().orEmpty(),
-                artist = metadata.artist?.toString().orEmpty(),
+                songId = songId,
+                title = item.mediaMetadata.title?.toString().orEmpty(),
+                artist = item.mediaMetadata.artist?.toString().orEmpty(),
+                durationMs = songId?.let(songsById::get)?.durationMs ?: 0,
                 isCurrent = index == c.currentMediaItemIndex,
             )
             index = timeline.getNextWindowIndex(index, Player.REPEAT_MODE_OFF, c.shuffleModeEnabled)
         }
         return result
+    }
+
+    /** Every playlist index, in the order they play. */
+    private fun playOrder(c: Player): List<Int> {
+        val timeline = c.currentTimeline
+        val order = mutableListOf<Int>()
+        var index = timeline.getFirstWindowIndex(c.shuffleModeEnabled)
+        while (index != C.INDEX_UNSET) {
+            order += index
+            index = timeline.getNextWindowIndex(index, Player.REPEAT_MODE_OFF, c.shuffleModeEnabled)
+        }
+        return order
     }
 
     fun currentPosition(): Long = controller?.currentPosition ?: 0
@@ -179,8 +215,12 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         c.play()
     }
 
-    fun playRandom() {
-        if (songs.isNotEmpty()) play(songs, songs.random(), QueueSource.LIBRARY)
+    /** Turns shuffle on and starts a fresh queue from [list], beginning with a random song. */
+    fun shuffleAll(list: List<Song>, source: QueueSource) {
+        val c = controller ?: return
+        if (list.isEmpty()) return
+        c.shuffleModeEnabled = true
+        playAll(list, source)
     }
 
     fun togglePlayPause() {
@@ -203,6 +243,17 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         controller?.let { it.shuffleModeEnabled = !it.shuffleModeEnabled }
     }
 
+    /** Repeat cycles off → all → one → off. */
+    fun cycleRepeat() {
+        controller?.let {
+            it.repeatMode = when (it.repeatMode) {
+                Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL
+                Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE
+                else -> Player.REPEAT_MODE_OFF
+            }
+        }
+    }
+
     fun jumpTo(entry: QueueEntry) {
         controller?.run {
             seekTo(entry.index, 0)
@@ -210,17 +261,49 @@ class PlayerViewModel(private val app: Application) : AndroidViewModel(app) {
         }
     }
 
-    fun removeFromQueue(entry: QueueEntry) {
-        controller?.removeMediaItem(entry.index)
+    /** Moves [entry] so it plays [offset] songs after the current one (1 = next). */
+    fun moveInQueue(entry: QueueEntry, offset: Int) {
+        val args = Bundle().apply {
+            putInt(PlaybackService.ARG_INDEX, entry.index)
+            putInt(PlaybackService.ARG_OFFSET, offset)
+        }
+        controller?.sendCustomCommand(SessionCommand(PlaybackService.MOVE, Bundle.EMPTY), args)
     }
 
-    /** A share-sheet intent carrying the current song's audio file, or null if nothing is loaded. */
-    fun shareIntent(): Intent? {
-        val id = playback.songId ?: return null
-        val mimeType = songs.find { it.id == id }?.mimeType ?: "audio/*"
+    fun moveToEnd(entry: QueueEntry) {
+        moveInQueue(entry, playback.queueSize)
+    }
+
+    /** Removes [entry] and returns what [restore] needs to undo it. */
+    fun removeFromQueue(entry: QueueEntry): RemovedEntry? {
+        val c = controller ?: return null
+        if (entry.index !in 0 until c.mediaItemCount) return null
+        val removed = RemovedEntry(
+            title = entry.title,
+            item = c.getMediaItemAt(entry.index),
+            index = entry.index,
+            position = playOrder(c).indexOf(entry.index),
+        )
+        c.removeMediaItem(entry.index)
+        return removed
+    }
+
+    /** Puts a removed song back where it was in the queue. The current song keeps playing. */
+    fun restore(removed: RemovedEntry) {
+        val args = Bundle().apply {
+            putBundle(PlaybackService.ARG_ITEM, removed.item.toBundle(MediaLibraryInfo.INTERFACE_VERSION))
+            putInt(PlaybackService.ARG_INDEX, removed.index)
+            putInt(PlaybackService.ARG_POSITION, removed.position)
+        }
+        controller?.sendCustomCommand(SessionCommand(PlaybackService.RESTORE, Bundle.EMPTY), args)
+    }
+
+    /** A share-sheet intent carrying the audio file of song [songId]. */
+    fun shareIntent(songId: Long): Intent {
+        val mimeType = songsById[songId]?.mimeType ?: "audio/*"
         val send = Intent(Intent.ACTION_SEND)
             .setType(mimeType)
-            .putExtra(Intent.EXTRA_STREAM, songUri(id))
+            .putExtra(Intent.EXTRA_STREAM, songUri(songId))
             .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         return Intent.createChooser(send, "Share song")
     }

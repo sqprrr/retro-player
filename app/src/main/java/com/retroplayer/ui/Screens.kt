@@ -7,6 +7,7 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
@@ -14,89 +15,223 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.lazy.rememberLazyListState
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
-import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.MutableLongState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
-import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.font.FontFamily
-import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import com.retroplayer.PlayerViewModel
 import com.retroplayer.QueueSource
+import com.retroplayer.Song
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 @Composable
 fun LibraryScreen(vm: PlayerViewModel, listState: LazyListState) {
     val query = vm.query.trim()
     val songs = remember(vm.songs, query) {
         if (query.isEmpty()) vm.songs
-        else vm.songs.filter { it.title.contains(query, ignoreCase = true) || it.artist.contains(query, ignoreCase = true) }
+        else vm.songs.filter {
+            it.title.contains(query, ignoreCase = true) ||
+                it.artist.contains(query, ignoreCase = true) ||
+                it.album.contains(query, ignoreCase = true)
+        }
     }
+    val rows = remember(songs) { libraryRows(songs) }
+    val playing = !vm.playback.showPlayButton
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        SearchField(vm.query, onChange = {
-            vm.query = it
-            scope.launch { listState.scrollToItem(0) }
-        })
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            RetroButton("$PLAY RANDOM", vm::playRandom, Modifier.weight(1f), enabled = vm.songs.isNotEmpty())
-            RetroButton(
-                if (vm.playback.shuffle) "SHUFFLE ON" else "SHUFFLE OFF",
-                vm::toggleShuffle,
-                Modifier.weight(1f),
-                latched = vm.playback.shuffle,
-            )
-        }
-        RetroText(if (songs.size == 1) "1 SONG" else "${songs.size} SONGS", size = 12.sp, bold = true)
-        LcdPanel(Modifier.fillMaxSize()) {
-            when {
-                !vm.libraryLoaded -> LcdMessage("READING MUSIC...")
-                vm.songs.isEmpty() -> LcdMessage("NO MUSIC FOUND ON THIS PHONE")
-                songs.isEmpty() -> LcdMessage("NO MATCHES")
-                else -> Row {
-                    LazyColumn(Modifier.weight(1f), state = listState) {
-                        items(songs, key = { it.id }) { song ->
-                            SongRow(
-                                title = song.title,
-                                artist = song.artist,
-                                duration = formatTime(song.durationMs),
-                                highlighted = song.id == vm.playback.songId,
-                                onClick = {
-                                    focusManager.clearFocus()
-                                    // Search only finds the song; the queue is always the whole library.
-                                    vm.play(vm.songs, song, QueueSource.LIBRARY)
-                                },
-                            )
+    Win95Window(
+        "Library",
+        Glyphs.Library,
+        Modifier.fillMaxSize(),
+        trailing = {
+            RetroText(if (songs.size == 1) "1 song" else "${songs.size} songs", Modifier.padding(end = 6.dp), size = 13.sp, font = RetroFonts.Chrome)
+        },
+    ) {
+        LcdSearchField(
+            vm.query,
+            onChange = {
+                vm.query = it
+                scope.launch { listState.scrollToItem(0) }
+            },
+            placeholder = "Songs, artists, albums…",
+            label = "Search library",
+            modifier = Modifier.padding(6.dp).fillMaxWidth(),
+        )
+        // A Win95 tab control. The library has a single view, so there is a single tab.
+        SelectedTab("Songs", Modifier.padding(horizontal = 6.dp).zIndex(1f))
+        Column(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp)
+                .offset(y = (-2).dp)
+                .background(Retro.Face)
+                .bevel()
+                .padding(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                val enabled = songs.isNotEmpty()
+                val accent = if (enabled) Retro.LcdText else Retro.TextDisabled
+                Win95Button({ vm.playAll(songs, QueueSource.LIBRARY) }, Modifier.weight(1f).height(44.dp), enabled) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Glyph(Glyphs.PlayMarker, color = accent)
+                        RetroText("Play all", size = 15.sp, font = RetroFonts.Chrome)
+                    }
+                }
+                Win95Button({ vm.shuffleAll(songs, QueueSource.LIBRARY) }, Modifier.weight(1f).height(44.dp), enabled) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Glyph(Glyphs.Shuffle, Modifier.size(18.dp, 14.dp), accent)
+                        RetroText("Shuffle all", size = 15.sp, font = RetroFonts.Chrome)
+                    }
+                }
+            }
+            LcdPanel(Modifier.weight(1f).fillMaxWidth()) {
+                Column {
+                    // Column headers of a details list. The library is always sorted by title.
+                    Row {
+                        ColumnHeader("Title", Modifier.weight(1f), sortedUp = true)
+                        ColumnHeader("Time", Modifier.width(74.dp))
+                    }
+                    when {
+                        !vm.libraryLoaded -> LcdMessage("READING MUSIC...")
+                        vm.songs.isEmpty() -> LcdMessage("NO MUSIC FOUND ON THIS PHONE")
+                        songs.isEmpty() -> LcdMessage("NO MATCHES")
+                        else -> Row {
+                            LazyColumn(Modifier.weight(1f), state = listState) {
+                                items(rows, key = { it.key }) { row ->
+                                    when (row) {
+                                        is LetterRow -> RetroText(
+                                            row.letter,
+                                            Modifier
+                                                .fillMaxWidth()
+                                                .background(Retro.LcdGroupBg)
+                                                .padding(start = 10.dp, top = 4.dp, end = 10.dp)
+                                                .semantics { heading() },
+                                            Retro.LcdTextFaint,
+                                            18.sp,
+                                            RetroFonts.Lcd,
+                                        )
+                                        is SongItem -> SongRow(
+                                            title = row.song.title,
+                                            artist = row.song.artist,
+                                            duration = formatTime(row.song.durationMs),
+                                            current = row.song.id == vm.playback.songId,
+                                            playing = playing,
+                                            onClick = {
+                                                focusManager.clearFocus()
+                                                // Search only finds the song; the queue is always the whole library.
+                                                vm.play(vm.songs, row.song, QueueSource.LIBRARY)
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                            Scrollbar(listState)
                         }
                     }
-                    Scrollbar(listState)
                 }
             }
         }
+        Spacer(Modifier.height(2.dp))
+    }
+}
+
+private sealed interface LibraryRow {
+    val key: Any
+}
+
+private class LetterRow(val letter: String, override val key: Any) : LibraryRow
+
+private class SongItem(val song: Song) : LibraryRow {
+    override val key: Any get() = song.id
+}
+
+/** The songs with a letter header wherever the first letter of the title changes. */
+private fun libraryRows(songs: List<Song>): List<LibraryRow> {
+    val rows = mutableListOf<LibraryRow>()
+    var last: String? = null
+    for (song in songs) {
+        val first = song.title.firstOrNull()
+        val letter = if (first != null && first.isLetter()) first.uppercase() else "#"
+        // Keyed by position: symbols can sort both before and after the letters, so "#" may appear twice.
+        if (letter != last) rows += LetterRow(letter, "letter-${rows.size}")
+        last = letter
+        rows += SongItem(song)
+    }
+    return rows
+}
+
+/** The selected tab of a Win95 tab control: open at the bottom, so it merges into the panel below it. */
+@Composable
+private fun SelectedTab(label: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .height(44.dp)
+            .background(Retro.Face)
+            .drawBehind {
+                val w = 1.dp.toPx().roundToInt().coerceAtLeast(1).toFloat()
+                drawRect(Retro.BevelHighlight, Offset.Zero, Size(size.width, w))
+                drawRect(Retro.BevelHighlight, Offset.Zero, Size(w, size.height))
+                drawRect(Retro.BevelLight, Offset(w, w), Size(size.width - 2 * w, w))
+                drawRect(Retro.BevelLight, Offset(w, w), Size(w, size.height - w))
+                drawRect(Retro.BevelDark, Offset(size.width - w, 0f), Size(w, size.height))
+                drawRect(Retro.BevelShadow, Offset(size.width - 2 * w, w), Size(w, size.height - w))
+            }
+            .semantics {
+                role = Role.Tab
+                selected = true
+            }
+            .padding(horizontal = 12.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        RetroText(label, size = 14.sp, font = RetroFonts.Chrome, bold = true)
+    }
+}
+
+@Composable
+private fun ColumnHeader(label: String, modifier: Modifier, sortedUp: Boolean = false) {
+    Row(
+        modifier
+            .height(30.dp)
+            .background(Retro.Face)
+            .bevel()
+            .padding(horizontal = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp, if (sortedUp) Alignment.Start else Alignment.CenterHorizontally),
+    ) {
+        RetroText(label, color = Retro.TextOnFace, size = 13.sp, font = RetroFonts.Chrome)
+        if (sortedUp) Glyph(Glyphs.SortUp, color = Retro.TextOnFace)
     }
 }
 
@@ -104,47 +239,59 @@ fun LibraryScreen(vm: PlayerViewModel, listState: LazyListState) {
 fun ListenAgainScreen(vm: PlayerViewModel, listState: LazyListState) {
     val top = vm.listenAgain
     val recent = vm.recentlyPlayed
-    if (top.isEmpty() && recent.isEmpty()) {
-        LcdPanel(Modifier.fillMaxSize()) { LcdMessage("Nothing here yet — play some music") }
-        return
-    }
-    LazyColumn(state = listState, verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        item {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                RetroText("LISTEN AGAIN", Modifier.weight(1f), size = 16.sp, bold = true)
-                RetroButton(
-                    "$PLAY PLAY ALL",
-                    { vm.playAll(top, QueueSource.LISTEN_AGAIN) },
-                    enabled = top.isNotEmpty(),
-                    size = 13.sp,
-                )
-            }
-        }
-        if (top.isEmpty()) {
-            item { RetroText("No plays in the last 30 days.", color = Retro.Disabled, maxLines = 2) }
-        }
-        items(top.chunked(3)) { row ->
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                row.forEach { song ->
-                    Tile(song.title, song.artist, Modifier.weight(1f)) {
-                        vm.play(top, song, QueueSource.LISTEN_AGAIN)
+    val playing = !vm.playback.showPlayButton
+    Win95Window("Listen Again", Glyphs.ListenAgain, Modifier.fillMaxSize()) {
+        if (top.isEmpty() && recent.isEmpty()) {
+            LcdPanel(Modifier.padding(6.dp).fillMaxSize()) { LcdMessage("Nothing here yet — play some music") }
+        } else {
+            LazyColumn(
+                Modifier.fillMaxSize(),
+                state = listState,
+                contentPadding = PaddingValues(6.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                item {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        SectionLabel("Most played", Modifier.weight(1f))
+                        Win95Button({ vm.playAll(top, QueueSource.LISTEN_AGAIN) }, Modifier.width(132.dp), enabled = top.isNotEmpty()) {
+                            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                Glyph(Glyphs.PlayMarker, color = if (top.isNotEmpty()) Retro.LcdText else Retro.TextDisabled)
+                                RetroText("Play all", size = 15.sp, font = RetroFonts.Chrome)
+                            }
+                        }
                     }
                 }
-                repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
-            }
-        }
-        item { RetroText("RECENTLY PLAYED", Modifier.padding(top = 8.dp), size = 16.sp, bold = true) }
-        item {
-            LcdPanel(Modifier.fillMaxWidth()) {
-                Column {
-                    recent.forEach { song ->
-                        SongRow(
-                            title = song.title,
-                            artist = song.artist,
-                            duration = formatTime(song.durationMs),
-                            highlighted = song.id == vm.playback.songId,
-                            onClick = { vm.play(recent, song, QueueSource.RECENTLY_PLAYED) },
-                        )
+                if (top.isEmpty()) {
+                    item { RetroText("No plays in the last 30 days.", maxLines = 2) }
+                }
+                items(top.chunked(3)) { row ->
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        row.forEach { song ->
+                            Win95Button({ vm.play(top, song, QueueSource.LISTEN_AGAIN) }, Modifier.weight(1f).aspectRatio(1f)) {
+                                Column(Modifier.fillMaxSize().padding(8.dp), verticalArrangement = Arrangement.SpaceBetween) {
+                                    RetroText(song.title, size = 13.sp, bold = true, maxLines = 3)
+                                    RetroText(song.artist, size = 11.sp, maxLines = 2)
+                                }
+                            }
+                        }
+                        repeat(3 - row.size) { Spacer(Modifier.weight(1f)) }
+                    }
+                }
+                item { SectionLabel("Recently played", Modifier.padding(top = 8.dp)) }
+                item {
+                    LcdPanel(Modifier.fillMaxWidth()) {
+                        Column {
+                            recent.forEach { song ->
+                                SongRow(
+                                    title = song.title,
+                                    artist = song.artist,
+                                    duration = formatTime(song.durationMs),
+                                    current = song.id == vm.playback.songId,
+                                    playing = playing,
+                                    onClick = { vm.play(recent, song, QueueSource.RECENTLY_PLAYED) },
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -152,243 +299,100 @@ fun ListenAgainScreen(vm: PlayerViewModel, listState: LazyListState) {
     }
 }
 
-/** A plain beveled square with the song's title and artist. */
 @Composable
-private fun Tile(title: String, artist: String, modifier: Modifier, onClick: () -> Unit) {
-    val interaction = remember { MutableInteractionSource() }
-    val pressed by interaction.collectIsPressedAsState()
-    Column(
-        modifier
-            .aspectRatio(1f)
-            .background(Retro.Face)
-            .bevel(sunken = pressed)
-            .clickable(interaction, indication = null, onClick = onClick)
-            .padding(8.dp),
-        verticalArrangement = Arrangement.SpaceBetween,
-    ) {
-        RetroText(title, size = 13.sp, bold = true, maxLines = 3)
-        RetroText(artist, size = 11.sp, maxLines = 2)
-    }
+private fun SectionLabel(text: String, modifier: Modifier = Modifier) {
+    RetroText(text, modifier.semantics { heading() }, Retro.TextOnFace, 15.sp, RetroFonts.Chrome, bold = true)
 }
 
+/** The playback position, re-read twice a second while shown. */
 @Composable
-fun NowPlayingScreen(vm: PlayerViewModel) {
-    val context = LocalContext.current
-    val state = vm.playback
-    val hasSong = state.songId != null
-    var position by remember { mutableLongStateOf(0L) }
-    var scrubbing by remember { mutableStateOf<Long?>(null) }
+fun rememberPlaybackPosition(vm: PlayerViewModel): MutableLongState {
+    val position = remember { mutableLongStateOf(vm.currentPosition()) }
     LaunchedEffect(Unit) {
         while (true) {
-            position = vm.currentPosition()
+            position.longValue = vm.currentPosition()
             delay(500)
         }
     }
-    val shownPosition = scrubbing ?: position
-    // The current song is always the first row, so jump back up when it changes.
-    val queueState = rememberLazyListState()
-    LaunchedEffect(state.songId) { queueState.scrollToItem(0) }
-
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        LcdPanel(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Row {
-                    RetroText("NOW PLAYING", Modifier.weight(1f), Retro.LcdDim, 11.sp)
-                    if (hasSong) {
-                        RetroText(if (state.showPlayButton) "$PAUSE PAUSED" else "$PLAY PLAYING", color = Retro.LcdText, size = 11.sp)
-                    }
-                }
-                RetroText(
-                    if (hasSong) state.title else "-- NO SONG --",
-                    color = Retro.LcdText, size = 20.sp, bold = true, maxLines = 2,
-                )
-                if (!hasSong) RetroText("Pick a song in LIBRARY.", color = Retro.LcdDim, size = 14.sp)
-                RetroText(state.artist, color = Retro.LcdDim, size = 14.sp)
-                RetroText(
-                    "${formatTime(shownPosition)} / ${formatTime(state.durationMs)}",
-                    color = Retro.LcdText, size = 30.sp, bold = true,
-                )
-            }
-        }
-        SeekBar(
-            positionMs = shownPosition,
-            durationMs = if (hasSong) state.durationMs else 0,
-            onScrub = { scrubbing = it },
-            onSeek = {
-                vm.seekTo(it)
-                position = it
-                scrubbing = null
-            },
-        )
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            val buttonModifier = Modifier.weight(1f).height(52.dp)
-            RetroButton(PREV, vm::previous, buttonModifier, enabled = hasSong, description = "Previous")
-            RetroButton(
-                if (state.showPlayButton) PLAY else PAUSE,
-                vm::togglePlayPause,
-                buttonModifier,
-                enabled = hasSong,
-                description = if (state.showPlayButton) "Play" else "Pause",
-            )
-            RetroButton(NEXT, vm::next, buttonModifier, enabled = hasSong, description = "Next")
-            RetroButton(
-                SHUFFLE,
-                vm::toggleShuffle,
-                buttonModifier,
-                latched = state.shuffle,
-                size = 28.sp,
-                description = if (state.shuffle) "Shuffle on" else "Shuffle off",
-            )
-            RetroButton(
-                "SHARE",
-                onClick = { vm.shareIntent()?.let(context::startActivity) },
-                modifier = buttonModifier,
-                enabled = hasSong,
-                size = 12.sp,
-            )
-        }
-        RetroText("UP NEXT (${(state.queue.size - 1).coerceAtLeast(0)})", size = 12.sp, bold = true)
-        LcdPanel(Modifier.fillMaxSize()) {
-            if (state.queue.isEmpty()) {
-                LcdMessage("QUEUE IS EMPTY")
-            } else {
-                Row {
-                    LazyColumn(Modifier.weight(1f), state = queueState) {
-                        // No keys: playlist indexes shift on removal, and the current song is always the first row.
-                        items(state.queue) { entry ->
-                            SongRow(
-                                title = if (entry.isCurrent) "$PLAY ${entry.title}" else entry.title,
-                                artist = entry.artist,
-                                duration = null,
-                                highlighted = entry.isCurrent,
-                                onClick = { vm.jumpTo(entry) },
-                                trailing = if (entry.isCurrent) null else {
-                                    {
-                                        RetroButton(
-                                            "X",
-                                            { vm.removeFromQueue(entry) },
-                                            Modifier.size(40.dp),
-                                            size = 13.sp,
-                                            description = "Remove ${entry.title} from queue",
-                                        )
-                                    }
-                                },
-                            )
-                        }
-                    }
-                    Scrollbar(queueState)
-                }
-            }
-        }
-    }
+    return position
 }
 
-@Composable
-private fun SearchField(value: String, onChange: (String) -> Unit) {
-    val focus = LocalFocusManager.current
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .background(Retro.Beige)
-            .bevel(sunken = true)
-            .heightIn(min = 48.dp)
-            .padding(start = 8.dp, end = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        RetroText("SEARCH>", bold = true)
-        Spacer(Modifier.size(6.dp))
-        BasicTextField(
-            value = value,
-            onValueChange = onChange,
-            modifier = Modifier.weight(1f),
-            singleLine = true,
-            textStyle = TextStyle(color = Retro.Ink, fontSize = 15.sp, fontFamily = FontFamily.Monospace),
-            cursorBrush = SolidColor(Retro.Ink),
-            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-            keyboardActions = KeyboardActions(onSearch = { focus.clearFocus() }),
-            decorationBox = { field ->
-                if (value.isEmpty()) RetroText("title or artist", color = Retro.Disabled, size = 15.sp)
-                field()
-            },
-        )
-        if (value.isNotEmpty()) {
-            RetroText(
-                "[X]",
-                Modifier
-                    .clickable(null, indication = null, onClickLabel = "Clear search") { onChange("") }
-                    .padding(horizontal = 10.dp, vertical = 12.dp),
-                bold = true,
-            )
-        }
-    }
-}
-
+/** Small "Now Playing" window docked above the taskbar. Tap the LCD or the restore button to open the full player. */
 @Composable
 fun MiniPlayer(vm: PlayerViewModel, onOpen: () -> Unit) {
     val state = vm.playback
-    val hasSong = state.songId != null
-    Row(
-        Modifier
-            .fillMaxWidth()
-            .background(Retro.Face)
-            .bevel()
-            .padding(5.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(5.dp),
+    val position by rememberPlaybackPosition(vm)
+    Win95Window(
+        "Now Playing",
+        Glyphs.Note,
+        Modifier.fillMaxWidth(),
+        compact = true,
+        trailing = { TitleBarButton(Glyphs.Maximize, "Open full player", onOpen, height = 22.dp) },
     ) {
-        LcdPanel(
-            Modifier
-                .weight(1f)
-                .clickable(null, indication = null, enabled = hasSong, onClick = onOpen),
+        Row(
+            Modifier.padding(6.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            Column(Modifier.padding(horizontal = 4.dp)) {
-                RetroText(if (hasSong) state.title else "-- NO SONG --", color = Retro.LcdText, bold = true)
-                RetroText(if (hasSong) state.artist else " ", color = Retro.LcdDim, size = 12.sp)
+            LcdPanel(Modifier.weight(1f).clickable(null, null, onClickLabel = "Open full player", role = Role.Button, onClick = onOpen)) {
+                Column(
+                    Modifier.padding(start = 8.dp, top = 4.dp, end = 8.dp, bottom = 5.dp),
+                    verticalArrangement = Arrangement.spacedBy(3.dp),
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        RetroText(state.title, Modifier.weight(1f).alignByBaseline(), size = 22.sp, font = RetroFonts.Lcd, lineHeight = 1.em)
+                        RetroText(formatTime(position), Modifier.alignByBaseline(), Retro.LcdTextDim, 18.sp, RetroFonts.Lcd, lineHeight = 1.em)
+                    }
+                    RetroText(state.artist, color = Retro.LcdTextDim, size = 12.sp)
+                    ProgressLine(progress(position, state.durationMs))
+                }
+            }
+            Win95Button(
+                vm::togglePlayPause,
+                Modifier.size(44.dp, 52.dp),
+                contentColor = Retro.LcdText,
+                description = if (state.showPlayButton) "Play" else "Pause",
+            ) { Glyph(if (state.showPlayButton) Glyphs.Play else Glyphs.Pause, Modifier.size(14.dp, 16.dp)) }
+            Win95Button(vm::next, Modifier.size(44.dp, 52.dp), description = "Next") {
+                Glyph(Glyphs.Next, Modifier.size(18.dp, 14.dp))
             }
         }
-        RetroButton(
-            if (state.showPlayButton) PLAY else PAUSE,
-            vm::togglePlayPause,
-            Modifier.size(52.dp),
-            enabled = hasSong,
-            size = 18.sp,
-            description = if (state.showPlayButton) "Play" else "Pause",
-        )
     }
 }
 
-/** One line in an LCD list. Inverted colors mark the current song (or a press). */
+/** One song in an LCD list. Inverted colors and a little level meter mark the current song; a press inverts too. */
 @Composable
 fun SongRow(
     title: String,
     artist: String,
-    duration: String?,
-    highlighted: Boolean,
+    duration: String,
+    current: Boolean,
+    playing: Boolean,
     onClick: () -> Unit,
-    trailing: @Composable (() -> Unit)? = null,
 ) {
     val interaction = remember { MutableInteractionSource() }
     val pressed by interaction.collectIsPressedAsState()
-    val inverted = highlighted || pressed
-    val fg = if (inverted) Retro.Lcd else Retro.LcdText
-    val dim = if (inverted) Retro.Lcd else Retro.LcdDim
+    val inverted = current || pressed
+    val fg = if (inverted) Retro.CurrentRowText else Retro.LcdText
+    val sub = if (inverted) Retro.CurrentRowSub else Retro.LcdTextDim
     Row(
         Modifier
             .fillMaxWidth()
-            .background(if (inverted) Retro.LcdText else Color.Transparent)
-            .clickable(interaction, indication = null, onClick = onClick)
-            .padding(horizontal = 6.dp, vertical = 6.dp),
+            .heightIn(min = 54.dp)
+            .background(if (inverted) Retro.CurrentRowBg else Color.Transparent)
+            .dashedDivider()
+            .clickable(interaction, indication = null, onClickLabel = "Play", onClick = onClick)
+            .semantics { if (current) stateDescription = "Now playing" }
+            .padding(horizontal = 10.dp, vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Column(Modifier.weight(1f)) {
-            RetroText(title, color = fg, bold = true)
-            RetroText(artist, color = dim, size = 12.sp)
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(1.dp)) {
+            RetroText(title, color = fg, size = 15.sp, bold = true)
+            RetroText(artist, color = sub, size = 13.sp)
         }
-        if (duration != null) {
-            Spacer(Modifier.size(8.dp))
-            RetroText(duration, color = fg, size = 13.sp)
-        }
-        trailing?.invoke()
+        if (current) LevelBars(4, 3.dp, 2.dp, 14.dp, fg, running = playing)
+        RetroText(duration, Modifier.width(54.dp), sub, 19.sp, RetroFonts.Lcd, align = TextAlign.End)
     }
 }
 

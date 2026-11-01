@@ -17,16 +17,29 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.WindowInsetsSides
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.safeDrawingPadding
+import androidx.compose.foundation.layout.windowInsetsBottomHeight
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -35,12 +48,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import com.retroplayer.PlayerViewModel
 import com.retroplayer.Tab
+import kotlinx.coroutines.launch
 import kotlin.math.abs
 
 private val audioPermission =
@@ -78,13 +93,7 @@ fun App(vm: PlayerViewModel) {
         onPauseOrDispose {}
     }
 
-    Box(
-        Modifier
-            .fillMaxSize()
-            .background(Retro.Face)
-            .safeDrawingPadding()
-            .padding(6.dp),
-    ) {
+    Box(Modifier.fillMaxSize().background(Retro.Desktop)) {
         if (hasAudio) {
             MainScreen(vm)
         } else {
@@ -108,34 +117,33 @@ fun App(vm: PlayerViewModel) {
 @Composable
 private fun PermissionScreen(blocked: Boolean, onRequest: () -> Unit) {
     Column(
-        Modifier.fillMaxSize(),
+        Modifier.fillMaxSize().safeDrawingPadding().padding(6.dp),
         verticalArrangement = Arrangement.Center,
-        horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        LcdPanel(Modifier.fillMaxWidth()) {
-            Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                RetroText("NO ACCESS TO MUSIC", color = Retro.LcdText, size = 20.sp, bold = true)
-                RetroText(
-                    "Retro Player needs permission to read the audio files on this phone. " +
-                        "Without it, there is nothing to play.",
-                    color = Retro.LcdText,
-                    maxLines = 6,
-                )
-                if (blocked) {
-                    RetroText(
-                        "Android will not ask again. Open Settings > Permissions and allow \"Music and audio\".",
-                        color = Retro.LcdDim,
-                        maxLines = 6,
-                    )
+        Win95Window("Retro Player", Glyphs.Note, Modifier.fillMaxWidth()) {
+            Column(Modifier.padding(6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                LcdPanel(Modifier.fillMaxWidth()) {
+                    Column(Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        RetroText("NO ACCESS TO MUSIC", size = 28.sp, font = RetroFonts.Lcd)
+                        RetroText(
+                            "Retro Player needs permission to read the audio files on this phone. " +
+                                "Without it, there is nothing to play.",
+                            maxLines = 6,
+                        )
+                        if (blocked) {
+                            RetroText(
+                                "Android will not ask again. Open Settings > Permissions and allow \"Music and audio\".",
+                                color = Retro.LcdTextDim,
+                                maxLines = 6,
+                            )
+                        }
+                    }
+                }
+                Win95Button(onRequest, Modifier.fillMaxWidth()) {
+                    RetroText(if (blocked) "Open Settings" else "Allow access", size = 15.sp, font = RetroFonts.Chrome)
                 }
             }
         }
-        RetroButton(
-            if (blocked) "OPEN SETTINGS" else "ALLOW ACCESS",
-            onClick = onRequest,
-            modifier = Modifier.padding(top = 12.dp).fillMaxWidth(),
-            size = 18.sp,
-        )
     }
 }
 
@@ -143,7 +151,7 @@ private fun PermissionScreen(blocked: Boolean, onRequest: () -> Unit) {
 private fun MainScreen(vm: PlayerViewModel) {
     val tab = vm.tab
     if (tab == null) {
-        RetroText("LOADING...", Modifier.fillMaxWidth(), align = TextAlign.Center)
+        RetroText("LOADING...", Modifier.fillMaxWidth().safeDrawingPadding().padding(12.dp), align = TextAlign.Center)
         return
     }
     // Kept here so each list remembers its scroll position while you switch tabs.
@@ -160,50 +168,91 @@ private fun MainScreen(vm: PlayerViewModel) {
     val focusManager = LocalFocusManager.current
     LaunchedEffect(tab) { focusManager.clearFocus() }
 
+    val scope = rememberCoroutineScope()
+    val showArtist: (String) -> Unit = { artist ->
+        vm.query = artist
+        vm.tab = Tab.LIBRARY
+        scope.launch { libraryListState.scrollToItem(0) }
+    }
+
     val currentTab by rememberUpdatedState(tab)
     Column(
-        Modifier.pointerInput(Unit) {
-            // Swipe left/right anywhere to change tabs. Lists, the seek bar and the scrollbar
-            // handle their own drags first, so this only sees mostly-horizontal swipes.
-            val threshold = 56.dp.toPx()
-            var distance = 0f
-            detectHorizontalDragGestures(
-                onDragStart = { distance = 0f },
-                onHorizontalDrag = { change, dragAmount ->
-                    change.consume()
-                    distance += dragAmount
-                },
-                onDragEnd = {
-                    if (abs(distance) > threshold) {
-                        val next = currentTab.ordinal + if (distance < 0) 1 else -1
-                        Tab.entries.getOrNull(next)?.let { vm.tab = it }
-                    }
-                },
-            )
-        },
+        Modifier
+            .fillMaxSize()
+            // The taskbar reaches the screen edges and runs under the navigation bar.
+            .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top + WindowInsetsSides.Horizontal))
+            .imePadding()
+            .pointerInput(Unit) {
+                // Swipe left/right anywhere to change tabs. Lists, the seek bar and the scrollbar
+                // handle their own drags first, so this only sees mostly-horizontal swipes.
+                val threshold = 56.dp.toPx()
+                var distance = 0f
+                detectHorizontalDragGestures(
+                    onDragStart = { distance = 0f },
+                    onHorizontalDrag = { change, dragAmount ->
+                        change.consume()
+                        distance += dragAmount
+                    },
+                    onDragEnd = {
+                        if (abs(distance) > threshold) {
+                            val next = currentTab.ordinal + if (distance < 0) 1 else -1
+                            Tab.entries.getOrNull(next)?.let { vm.tab = it }
+                        }
+                    },
+                )
+            },
         verticalArrangement = Arrangement.spacedBy(6.dp),
     ) {
-        Box(Modifier.weight(1f)) {
-            when (tab) {
-                Tab.LISTEN_AGAIN -> ListenAgainScreen(vm, listenAgainListState)
-                Tab.LIBRARY -> LibraryScreen(vm, libraryListState)
-                Tab.NOW_PLAYING -> NowPlayingScreen(vm)
+        Column(
+            Modifier.weight(1f).padding(start = 6.dp, top = 6.dp, end = 6.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Box(Modifier.weight(1f)) {
+                when (tab) {
+                    Tab.LISTEN_AGAIN -> ListenAgainScreen(vm, listenAgainListState)
+                    Tab.LIBRARY -> LibraryScreen(vm, libraryListState)
+                    Tab.NOW_PLAYING -> NowPlayingScreen(vm, onMinimize = { vm.tab = Tab.LIBRARY }, onShowArtist = showArtist)
+                }
             }
-        }
-        if (tab != Tab.NOW_PLAYING) {
-            MiniPlayer(vm, onOpen = { vm.tab = Tab.NOW_PLAYING })
+            if (tab != Tab.NOW_PLAYING && vm.playback.songId != null) {
+                MiniPlayer(vm, onOpen = { vm.tab = Tab.NOW_PLAYING })
+            }
         }
         // Tabs sit at the bottom, within thumb reach.
-        Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            Tab.entries.forEach {
-                RetroButton(
-                    it.label,
-                    onClick = { vm.tab = it },
-                    modifier = Modifier.weight(1f),
-                    latched = it == tab,
-                    size = 12.sp,
-                )
-            }
-        }
+        Taskbar(tab, onSelect = { vm.tab = it })
     }
 }
+
+@Composable
+private fun Taskbar(current: Tab, onSelect: (Tab) -> Unit) {
+    Column(Modifier.fillMaxWidth().background(Retro.Face).bevel().selectableGroup()) {
+        Row(
+            Modifier.height(58.dp).padding(start = 6.dp, top = 7.dp, end = 6.dp, bottom = 6.dp),
+            horizontalArrangement = Arrangement.spacedBy(5.dp),
+        ) {
+            Tab.entries.forEach {
+                val active = it == current
+                Win95Button(
+                    onClick = { onSelect(it) },
+                    modifier = Modifier.weight(1f).fillMaxHeight(),
+                    latched = active,
+                    role = Role.Tab,
+                    contentColor = if (active) Retro.LcdText else Retro.TextOnFace,
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Glyph(it.icon)
+                        RetroText(it.label, size = 14.sp, font = RetroFonts.Chrome, bold = active)
+                    }
+                }
+            }
+        }
+        Spacer(Modifier.windowInsetsBottomHeight(WindowInsets.navigationBars))
+    }
+}
+
+private val Tab.icon
+    get() = when (this) {
+        Tab.LISTEN_AGAIN -> Glyphs.ListenAgain
+        Tab.LIBRARY -> Glyphs.Library
+        Tab.NOW_PLAYING -> Glyphs.Playing
+    }

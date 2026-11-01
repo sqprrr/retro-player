@@ -1,32 +1,45 @@
 # Retro Player
 
-A small music player for Android that looks like early-2000s MP3 players and desktop software: gray
-beveled buttons, a green LCD screen, and monospace text. It plays the audio files already on your
-phone, keeps playing in the background, and remembers what you listen to.
+A small music player for Android that looks like Windows 95 desktop software with a green LCD:
+beveled charcoal windows with title bars, a taskbar, and green-on-black screens. It plays the audio
+files already on your phone, keeps playing in the background, and remembers what you listen to.
 
 ## Features
 
-- **Library**: every music file on the phone with title, artist and duration. A search field
-  filters by title and artist as you type, and a scrollbar lets you jump through long lists.
-- **Random song**: one button that immediately plays a random track.
+- **Library**: every music file on the phone with title, artist and duration, grouped by first
+  letter. A search field filters by title, artist and album as you type, and a scrollbar lets you
+  jump through long lists. **Play all** plays the songs shown; **Shuffle all** turns shuffle on and
+  plays them starting with a random one.
 - **Shuffle**: turning it on shuffles everything after the current song. Tapping a song that is
   already in the queue plays it right away without reshuffling, so Up Next stays the same.
-- **Now Playing**: play/pause, previous, next, shuffle, a seek bar, and the current time and duration.
-- **Queue**: shows what plays next. Tap a song to jump to it, or tap X to remove it.
-- **Share**: sends the current song's audio file through the standard Android share sheet.
+- **Repeat**: cycles off → all → one track.
+- **Now Playing**: play/pause, previous (restarts the song if more than 3 seconds in), next, shuffle,
+  repeat, a seek bar, and the elapsed, total and remaining time. Long titles scroll back and forth.
+  Shuffle and repeat show their state with a lit LED, a label and a pressed-in button.
+- **Up Next**: shows what plays next. Tap a song to jump to it.
+  Long-press a song for **Play now**, **Play next**, **Move to end**, **Go to artist**, **Share** and
+  **Remove from queue**. **Edit** shows a grip to drag songs into a new order and an X to remove them.
+  After a removal, **Undo** puts the song back where it was. The title-bar button maximizes the queue
+  over the player.
+- **Share**: sends a song's audio file through the standard Android share sheet, from the player's
+  ⋯ menu or a queue song's menu.
+- **Go to artist**: opens Library searched for that artist.
 - **Listen Again**: the songs you played most in the last 30 days (up to 20) as a grid of tiles,
   plus your last 20 different songs under **Recently Played**. **Play all** plays the grid as a
   queue (shuffled if shuffle is on). Songs deleted from the phone are hidden.
 - **Background playback** with a media notification and lock-screen controls.
-- **Dark mode** that follows the system theme: charcoal instead of gray, same green LCD.
+- **One dark look** regardless of the system theme: a charcoal desktop, green title bars and the
+  green LCD. Fonts are VT323 (LCD digits), IBM Plex Mono (song text) and Pixelify Sans (window
+  chrome), bundled from Google Fonts under the SIL Open Font License.
 
 ### Navigation
 
-- Three tabs at the bottom of the screen: **Listen Again**, **Library**, **Now Playing**.
+- A taskbar at the bottom of the screen with three tabs: **Listen again**, **Library**, **Playing**.
 - Swipe left or right anywhere to switch tabs.
-- Back steps one tab to the left, then leaves the app.
-- A mini player above the tabs shows the current song with a play/pause button. Tap it to open
-  Now Playing.
+- Back restores a maximized queue first, then steps one tab to the left, then leaves the app.
+- While a song is loaded, a docked **Now Playing** mini window above the taskbar shows it with the
+  elapsed time, a progress line, play/pause and next. Tap it to open the full player. The `_` button
+  on the full player goes back to Library with the mini player.
 
 The app opens on Listen Again once you have listening history, and on Library before that.
 
@@ -74,12 +87,14 @@ has stopped asking.
 | File | What it does |
 | --- | --- |
 | `MusicLibrary.kt` | Reads music files from MediaStore. |
-| `PlaybackService.kt` | Owns the ExoPlayer and the media session (notification, lock screen), counts plays, and manages the shuffle order. |
+| `PlaybackService.kt` | Owns the ExoPlayer and the media session (notification, lock screen), counts plays, and manages the shuffle order, queue moves and undo. |
 | `PlayerViewModel.kt` | Connects the UI to the service through a `MediaController` and holds the screen state. |
 | `History.kt` | Room database of plays (song ID and time) and the Listen Again queries. |
-| `ui/Retro.kt` | The palette, beveled borders, buttons, LCD panel, seek bar and scrollbar. |
-| `ui/Screens.kt` | Library, Listen Again, Now Playing, the queue and the mini player. |
-| `ui/App.kt` | Permissions, tabs, swipes and Back handling. |
+| `ui/Retro.kt` | Design tokens, fonts, bevels and the Win95 parts: window, button, LCD panel, LED, slider, menu, status bar, search field, scrollbar. |
+| `ui/Glyphs.kt` | The vector icons. |
+| `ui/Screens.kt` | Library, Listen Again and the mini player. |
+| `ui/NowPlaying.kt` | Now Playing and the Up Next queue (edit, drag, menu, undo). |
+| `ui/App.kt` | Permissions, the taskbar, swipes and Back handling. |
 
 The player lives in a Media3 `MediaSessionService`, so music keeps playing when the app is closed.
 The UI talks to it through a `MediaController`.
@@ -87,7 +102,8 @@ The UI talks to it through a `MediaController`.
 Each queue remembers which list it came from (Library, Listen Again or Recently Played). When you
 tap a song from that same list, the app sends the service a `PLAY_NOW` command instead of replacing
 the queue. In shuffle mode the service then moves that song to play right now and keeps everything
-that was up next in the same order.
+that was up next in the same order. Moving a song in the queue and undoing a removal are custom
+commands too: in shuffle mode they rearrange the shuffle order instead of the playlist.
 
 ## Tech stack
 
